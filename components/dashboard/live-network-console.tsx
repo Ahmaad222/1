@@ -57,12 +57,12 @@ function formatRouterUptime(totalSeconds?: number | null) {
   const h = Math.floor((normalized % 86400) / 3600);
   const m = Math.floor((normalized % 3600) / 60);
   const s = Math.floor(normalized % 60);
-  
-  let res = [];
+
+  const res = [];
   if (d > 0) res.push(`${d}d`);
   if (h > 0) res.push(`${h}h`);
   if (m > 0) res.push(`${m}m`);
-  res.push(`${s}s`);
+  res.push(`${s.toString().padStart(2, '0')}s`);
   return res.join(' ');
 }
 
@@ -423,7 +423,7 @@ export function LiveNetworkConsole() {
                         <th className="px-3 py-3 text-left"><button onClick={() => handleSort('signal')} className="flex items-center gap-2 text-sm font-semibold text-emerald-400 hover:text-emerald-300">Signal / Dist <ArrowUpDown className="h-3 w-3" /></button></th>
                         <th className="px-3 py-3 text-left"><span className="flex items-center gap-2 text-sm font-semibold text-emerald-400">Security</span></th>
                         <th className="px-3 py-3 text-left"><button onClick={() => handleSort('clients')} className="flex items-center gap-2 text-sm font-semibold text-emerald-400 hover:text-emerald-300">Clients <ArrowUpDown className="h-3 w-3" /></button></th>
-                        <th className="px-3 py-3 text-left"><button onClick={() => handleSort('uptime')} className="flex items-center gap-2 text-sm font-semibold text-emerald-400 hover:text-emerald-300">UpTime <ArrowUpDown className="h-3 w-3" /></button></th>
+                        <th className="px-3 py-3 text-left w-[120px]"><button onClick={() => handleSort('uptime')} className="flex items-center gap-2 text-sm font-semibold text-emerald-400 hover:text-emerald-300">UpTime <ArrowUpDown className="h-3 w-3" /></button></th>
                         <th className="px-3 py-3 text-left"><button onClick={() => handleSort('classification')} className="flex items-center gap-2 text-sm font-semibold text-emerald-400 hover:text-emerald-300">Class <ArrowUpDown className="h-3 w-3" /></button></th>
                         <th className="px-3 py-3 text-center text-emerald-400 font-semibold">Action</th>
                       </tr>
@@ -481,8 +481,8 @@ export function LiveNetworkConsole() {
                                 <span className={`font-bold text-sm ${hasClients ? 'text-emerald-50' : 'text-slate-400'}`}>{network.clients_count || 0}</span>
                              </div>
                           </td>
-                          <td className="px-3 py-4">
-                            <div className="text-sm text-emerald-100/70 font-mono">
+                          <td className="px-3 py-4 w-[120px]">
+                            <div className="min-w-[11ch] text-sm text-emerald-100/70 font-mono tabular-nums whitespace-nowrap">
                               {formatRouterUptime(computeRollingUptimeSeconds(network))}
                             </div>
                           </td>

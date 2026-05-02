@@ -245,9 +245,10 @@ export function LiveNetworkConsole() {
             uptime: shouldRefreshUptime ? norm.uptime : existing.uptime,
             last_seen: shouldRefreshUptime ? norm.last_seen : existing.last_seen,
             clients: Array.isArray(norm.clients) ? norm.clients : existing.clients,
-            clients_count: norm.clients_count ?? existing.clients_count ?? 0,
+            clients_count: norm.clients_count !== undefined ? norm.clients_count : existing.clients_count,
             signal: (norm.signal && norm.signal !== 0) ? norm.signal : existing.signal,
           };
+          
           const isSame =
             existing.ssid === nextNetwork.ssid &&
             existing.classification === nextNetwork.classification &&
@@ -262,6 +263,9 @@ export function LiveNetworkConsole() {
             existing.manufacturer === nextNetwork.manufacturer;
 
           if (!isSame) {
+            if (existing.clients_count !== nextNetwork.clients_count) {
+               console.log(`[COUNT UPDATE] BSSID=${norm.bssid} OLD=${existing.clients_count} NEW=${nextNetwork.clients_count}`);
+            }
             newMap.set(norm.bssid, nextNetwork);
             changed = true;
           }

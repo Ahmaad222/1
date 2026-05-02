@@ -123,18 +123,24 @@ def upsert_network(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             return _safe_int(existing.get(key), default)
 
         raw_clients = payload.get("clients")
-        if raw_clients is None:
-            raw_clients = payload.get("clients_count")
-            
+        # Support both 'clients' list and 'clients_count' direct value
+        incoming_clients_count = _safe_int(payload.get("clients_count"))
+        
         clients_list = existing.get("clients", [])
         clients_count = existing.get("clients_count", 0)
         
+        # Explicit update: if clients list is provided, use it
         if isinstance(raw_clients, list):
             clients_list = _normalize_clients(raw_clients)
             clients_count = len(clients_list)
-        elif isinstance(raw_clients, (int, float, str)):
-            new_c = _safe_int(raw_clients, default=0)
-            clients_count = max(new_c or 0, 0)
+        # If no list but count is provided, update count (and clear list if count is 0)
+        elif incoming_clients_count is not None:
+            clients_count = max(incoming_clients_count, 0)
+            if clients_count == 0:
+                clients_list = []
+        # Fallback for some payloads that might just have 'clients' as a number
+        elif isinstance(raw_clients, (int, float)):
+            clients_count = max(int(raw_clients), 0)
             if clients_count == 0:
                 clients_list = []
 

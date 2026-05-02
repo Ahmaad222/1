@@ -28,7 +28,7 @@ aps_state = {}
 LOGGER = logging.getLogger("zeinaguard.sensor.sniffer")
 
 AP_TIMEOUT = 60
-CLIENT_TIMEOUT = float(os.getenv("CLIENT_ACTIVITY_TIMEOUT_SECONDS", "30"))
+CLIENT_TIMEOUT = float(os.getenv("CLIENT_ACTIVITY_TIMEOUT_SECONDS", "10"))
 START_TIME = time.time()
 FIRST_PACKET = True
 
@@ -43,6 +43,7 @@ def is_open_network(packet):
 def _normalize_mac(value):
     if not value:
         return ""
+    # Ensure consistent uppercase with colons
     return str(value).strip().upper().replace("-", ":")
 
 
@@ -51,7 +52,9 @@ def _is_group_mac(value):
     if not normalized or normalized == "FF:FF:FF:FF:FF:FF":
         return True
     try:
-        return bool(int(normalized.split(":")[0], 16) & 1)
+        # Check first octet for multicast bit
+        first_octet = int(normalized.split(":")[0], 16)
+        return bool(first_octet & 1)
     except Exception:
         return True
 
@@ -64,12 +67,16 @@ def _prune_clients(bssid, now=None):
     clients = clients_map.get(normalized_bssid)
     if not clients:
         return
+    
     stale_clients = [
         mac for mac, last_seen in clients.items()
         if now - last_seen > CLIENT_TIMEOUT
     ]
+    
     for mac in stale_clients:
+        LOGGER.info("[CLIENT REMOVE] BSSID=%s MAC=%s (timeout)", normalized_bssid, mac)
         clients.pop(mac, None)
+        
     if not clients:
         clients_map.pop(normalized_bssid, None)
 
@@ -81,23 +88,34 @@ def _active_clients(bssid):
 
 
 def _extract_client_observation(dot11):
+    # FCfield bit 0: ToDS, bit 1: FromDS
     to_ds = bool(int(dot11.FCfield) & 0x1)
     from_ds = bool(int(dot11.FCfield) & 0x2)
 
+    # Simplified logic for identifying Client -> AP or AP -> Client
     if to_ds and not from_ds:
+        # Client to AP: addr1=BSSID, addr2=SA(Client), addr3=DA
         bssid = dot11.addr1
         client = dot11.addr2
     elif from_ds and not to_ds:
+        # AP to Client: addr1=DA(Client), addr2=BSSID, addr3=SA
         bssid = dot11.addr2
         client = dot11.addr1
+    elif not to_ds and not from_ds:
+        # Ad-hoc or Management? addr1=DA, addr2=SA, addr3=BSSID
+        bssid = dot11.addr3
+        client = dot11.addr2
     else:
+        # Mesh / WDS
         bssid = dot11.addr3
         client = dot11.addr2
 
     bssid = _normalize_mac(bssid)
     client = _normalize_mac(client)
-    if not bssid or not client or bssid == client or _is_group_mac(client):
+    
+    if not bssid or not client or bssid == client or _is_group_mac(client) or _is_group_mac(bssid):
         return None, None
+        
     return bssid, client
 
 

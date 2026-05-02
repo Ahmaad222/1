@@ -558,16 +558,16 @@ class WSClient:
         try:
             from monitoring.sniffer import clients_map
 
-            client_set = (
-                clients_map.get(bssid)
-                or clients_map.get(str(bssid).upper())
-                or clients_map.get(str(bssid).lower())
-                or {}
-            )
+            # Normalize BSSID to ensure matching with sniffer's map
+            norm_bssid = str(bssid).strip().upper().replace("-", ":")
+            
+            client_set = clients_map.get(norm_bssid, {})
+            
             if isinstance(client_set, dict):
                 client_iterable = client_set.keys()
             else:
                 client_iterable = client_set
+                
             client_macs = sorted(str(mac).strip().upper() for mac in client_iterable if mac)
             return [{"mac": mac, "type": "device"} for mac in client_macs]
         except Exception as exc:

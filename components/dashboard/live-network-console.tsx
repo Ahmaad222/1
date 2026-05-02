@@ -48,22 +48,30 @@ function estimateDistance(signal: number | null | undefined): string {
   return '30m+';
 }
 
-function formatRouterUptime(totalSeconds?: number | null) {
-  if (totalSeconds == null || !Number.isFinite(totalSeconds) || totalSeconds <= 0) return '--';
+function RouterUptimeValue({ totalSeconds }: { totalSeconds: number }) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return <span>--</span>;
 
   const normalized = Math.max(0, Math.floor(totalSeconds));
-
   const d = Math.floor(normalized / 86400);
   const h = Math.floor((normalized % 86400) / 3600);
   const m = Math.floor((normalized % 3600) / 60);
   const s = Math.floor(normalized % 60);
+  const parts = [
+    d > 0 ? `${d}d` : null,
+    h > 0 ? `${h}h` : null,
+    m > 0 ? `${m}m` : null,
+    `${s.toString().padStart(2, '0')}s`,
+  ].filter(Boolean);
 
-  const res = [];
-  if (d > 0) res.push(`${d}d`);
-  if (h > 0) res.push(`${h}h`);
-  if (m > 0) res.push(`${m}m`);
-  res.push(`${s.toString().padStart(2, '0')}s`);
-  return res.join(' ');
+  return (
+    <span className="inline-flex min-w-[11ch] justify-start gap-[0.55ch] whitespace-nowrap font-mono tabular-nums leading-none">
+      {parts.map((part, index) => (
+        <span key={index} className="inline-block min-w-[2.7ch] text-left">
+          {part}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function classificationClasses(classification?: string) {
@@ -482,8 +490,8 @@ export function LiveNetworkConsole() {
                              </div>
                           </td>
                           <td className="px-3 py-4 w-[120px]">
-                            <div className="min-w-[11ch] text-sm text-emerald-100/70 font-mono tabular-nums whitespace-nowrap">
-                              {formatRouterUptime(computeRollingUptimeSeconds(network))}
+                            <div className="text-sm text-emerald-100/70">
+                              <RouterUptimeValue totalSeconds={computeRollingUptimeSeconds(network)} />
                             </div>
                           </td>
                           <td className="px-3 py-4">

@@ -28,6 +28,7 @@ aps_state = {}
 LOGGER = logging.getLogger("zeinaguard.sensor.sniffer")
 
 AP_TIMEOUT = 60
+CLIENT_TIMEOUT = float(os.getenv("CLIENT_ACTIVITY_TIMEOUT_SECONDS", "30"))
 START_TIME = time.time()
 FIRST_PACKET = True
 
@@ -37,6 +38,67 @@ def is_open_network(packet):
         cap = packet[Dot11Beacon].cap
         return not cap.privacy
     return False
+
+
+def _normalize_mac(value):
+    if not value:
+        return ""
+    return str(value).strip().upper().replace("-", ":")
+
+
+def _is_group_mac(value):
+    normalized = _normalize_mac(value)
+    if not normalized or normalized == "FF:FF:FF:FF:FF:FF":
+        return True
+    try:
+        return bool(int(normalized.split(":")[0], 16) & 1)
+    except Exception:
+        return True
+
+
+def _prune_clients(bssid, now=None):
+    normalized_bssid = _normalize_mac(bssid)
+    if not normalized_bssid:
+        return
+    now = time.time() if now is None else now
+    clients = clients_map.get(normalized_bssid)
+    if not clients:
+        return
+    stale_clients = [
+        mac for mac, last_seen in clients.items()
+        if now - last_seen > CLIENT_TIMEOUT
+    ]
+    for mac in stale_clients:
+        clients.pop(mac, None)
+    if not clients:
+        clients_map.pop(normalized_bssid, None)
+
+
+def _active_clients(bssid):
+    normalized_bssid = _normalize_mac(bssid)
+    _prune_clients(normalized_bssid)
+    return clients_map.get(normalized_bssid, {})
+
+
+def _extract_client_observation(dot11):
+    to_ds = bool(int(dot11.FCfield) & 0x1)
+    from_ds = bool(int(dot11.FCfield) & 0x2)
+
+    if to_ds and not from_ds:
+        bssid = dot11.addr1
+        client = dot11.addr2
+    elif from_ds and not to_ds:
+        bssid = dot11.addr2
+        client = dot11.addr1
+    else:
+        bssid = dot11.addr3
+        client = dot11.addr2
+
+    bssid = _normalize_mac(bssid)
+    client = _normalize_mac(client)
+    if not bssid or not client or bssid == client or _is_group_mac(client):
+        return None, None
+    return bssid, client
 
 
 def build_event(packet):
@@ -51,7 +113,7 @@ def build_event(packet):
     ssid = get_ssid(packet)
     channel = extract_channel(packet)
     signal = getattr(packet, "dBm_AntSignal", None)
-    clients_count = len(clients_map.get(bssid, set()))
+    clients_count = len(_active_clients(bssid))
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -87,10 +149,9 @@ def handle_packet(packet):
         event_queue.put(event)
 
     if dot11.type == 2:
-        bssid = dot11.addr3
-        src = dot11.addr2
-        if bssid and src and bssid != src:
-            clients_map.setdefault(bssid, set()).add(src)
+        bssid, client = _extract_client_observation(dot11)
+        if bssid and client:
+            clients_map.setdefault(bssid, {})[client] = time.time()
 
 
 def ap_cleaner():
@@ -98,8 +159,10 @@ def ap_cleaner():
         now = time.time()
 
         for bssid in list(aps_state.keys()):
+            _prune_clients(bssid, now)
             if now - aps_state[bssid]["last_seen"] > AP_TIMEOUT:
                 del aps_state[bssid]
+                clients_map.pop(_normalize_mac(bssid), None)
                 event_queue.put(
                     {
                         "type": "AP_REMOVED",

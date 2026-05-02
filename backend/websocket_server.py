@@ -629,11 +629,12 @@ def _normalize_threat_type(value: Any) -> str:
     return sanitize_input(str(value or "UNKNOWN"), max_length=100) or "UNKNOWN"
 
 def _normalize_oui(bssid: str | None) -> str:
-    normalized_bssid = _normalize_bssid(bssid)
-    parts = normalized_bssid.split(":")
-    if len(parts) < 3:
+    if not bssid:
         return ""
-    return ":".join(parts[:3])
+    hex_value = re.sub(r"[^0-9A-Fa-f]", "", str(bssid)).upper()
+    if len(hex_value) < 6:
+        return ""
+    return ":".join(hex_value[index:index + 2] for index in range(0, 6, 2))
 
 def _load_oui_db() -> dict[str, str]:
     global _oui_db
@@ -642,14 +643,18 @@ def _load_oui_db() -> dict[str, str]:
     try:
         with OUI_DB_PATH.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-            _oui_db = {str(key).upper(): str(value) for key, value in data.items()}
+            _oui_db = {}
+            for key, value in data.items():
+                normalized_key = _normalize_oui(str(key))
+                if normalized_key:
+                    _oui_db[normalized_key] = str(value).strip()
     except Exception:
         _oui_db = {}
     return _oui_db
 
 def _enrich_manufacturer(bssid: str | None, manufacturer: str | None) -> str | None:
     normalized = sanitize_input(str(manufacturer or ""), max_length=255) or None
-    if normalized and normalized.lower() != "unknown":
+    if normalized and normalized.lower() not in {"unknown", "unknown mfr", "n/a", "none"}:
         return normalized
     oui = _normalize_oui(bssid)
     if not oui:
@@ -773,7 +778,25 @@ def dispatch_attack_command(socketio: SocketIO, payload: dict[str, Any]) -> tupl
     return {"status": "ok", "sensor_id": sensor_id, "target_bssid": target_bssid, "channel": channel, "timestamp": _utc_iso()}, 200
 
 def _format_network_contract(update: BufferedNetworkUpdate) -> dict[str, Any]:
-    return {"sensor_id": update.sensor_id, "ssid": update.ssid, "bssid": update.bssid, "signal": update.signal_strength, "channel": update.channel, "classification": _normalize_classification(update.classification), "timestamp": _utc_iso(update.last_seen), "manufacturer": _enrich_manufacturer(update.bssid, update.manufacturer)}
+    return {
+        "sensor_id": update.sensor_id,
+        "ssid": update.ssid,
+        "bssid": update.bssid,
+        "signal": update.signal_strength,
+        "channel": update.channel,
+        "frequency": update.frequency,
+        "classification": _normalize_classification(update.classification),
+        "timestamp": _utc_iso(update.last_seen),
+        "last_seen": _utc_iso(update.last_seen),
+        "manufacturer": _enrich_manufacturer(update.bssid, update.manufacturer),
+        "clients_count": max(update.clients_count or 0, 0),
+        "auth": update.auth_type,
+        "wps": update.wps_info,
+        "encryption": update.encryption,
+        "uptime": update.uptime_seconds or 0,
+        "score": update.risk_score or 0,
+        "reasons": update.reasons or [],
+    }
 
 def _extract_clients_count(value: Any) -> int:
     if isinstance(value, list):
@@ -806,7 +829,30 @@ def _normalize_last_seen_iso(value: Any) -> str:
 
 def _format_networks_snapshot_item(network: dict[str, Any]) -> dict[str, Any]:
     clients = _normalize_live_clients(network.get("clients"))
-    return {"sensor_id": _safe_int(network.get("sensor_id"), default=0) or None, "bssid": _normalize_bssid(network.get("bssid")), "ssid": _normalize_ssid(network.get("ssid")), "signal": _safe_int(network.get("signal"), default=0), "classification": _normalize_classification(network.get("classification")).lower(), "last_seen": _normalize_last_seen_iso(network.get("last_seen") or network.get("timestamp")), "clients": clients, "clients_count": len(clients)}
+    clients_count = _safe_int(network.get("clients_count"), default=None)
+    if clients_count is None:
+        clients_count = len(clients)
+    return {
+        "sensor_id": _safe_int(network.get("sensor_id"), default=0) or None,
+        "bssid": _normalize_bssid(network.get("bssid")),
+        "ssid": _normalize_ssid(network.get("ssid")),
+        "signal": _safe_int(network.get("signal"), default=0),
+        "channel": _safe_int(network.get("channel"), default=0) or None,
+        "frequency": _safe_int(network.get("frequency"), default=0) or None,
+        "classification": _normalize_classification(network.get("classification")),
+        "last_seen": _normalize_last_seen_iso(network.get("last_seen") or network.get("timestamp")),
+        "timestamp": _normalize_last_seen_iso(network.get("last_seen") or network.get("timestamp")),
+        "manufacturer": _enrich_manufacturer(network.get("bssid"), network.get("manufacturer")),
+        "clients": clients,
+        "clients_count": max(clients_count or 0, 0),
+        "auth": network.get("auth") or network.get("auth_type"),
+        "wps": network.get("wps") or network.get("wps_info"),
+        "encryption": network.get("encryption"),
+        "uptime": _safe_int(network.get("uptime", network.get("uptime_seconds")), default=0) or 0,
+        "distance": network.get("distance"),
+        "score": _safe_int(network.get("score"), default=0) or 0,
+        "reasons": network.get("reasons") or [],
+    }
 
 def _broadcast_network_event(socketio: SocketIO, event_name: str, update: BufferedNetworkUpdate) -> None:
     payload = _format_network_contract(update)

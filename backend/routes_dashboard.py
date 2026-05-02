@@ -27,7 +27,7 @@ def _format_live_network(network: WiFiNetwork):
         classification = 'LEGIT'
 
     manufacturer = (network.manufacturer or '').strip() or None
-    if manufacturer and manufacturer.lower() == 'unknown':
+    if manufacturer and manufacturer.lower() in {'unknown', 'unknown mfr', 'n/a', 'none'}:
         manufacturer = None
 
     return {
@@ -36,10 +36,17 @@ def _format_live_network(network: WiFiNetwork):
         'bssid': network.bssid,
         'signal': network.signal_strength,
         'channel': network.channel,
+        'frequency': network.frequency,
         'classification': classification,
         'last_seen': network.last_seen.isoformat() if network.last_seen else None,
         'timestamp': network.last_seen.isoformat() if network.last_seen else None,
         'manufacturer': manufacturer,
+        'clients_count': max(network.clients_count or 0, 0),
+        'auth': network.auth_type,
+        'wps': network.wps_info,
+        'encryption': network.encryption,
+        'uptime': network.uptime_seconds or 0,
+        'score': network.risk_score or 0,
     }
 
 

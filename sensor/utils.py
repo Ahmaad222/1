@@ -1,6 +1,7 @@
 import binascii
 import json
 import math
+import re
 from pathlib import Path
 
 from scapy.layers.dot11 import Dot11Beacon, Dot11Elt
@@ -31,7 +32,11 @@ def _load_oui_db() -> dict[str, str]:
         if _OUI_DB_PATH.exists():
             with _OUI_DB_PATH.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
-                _OUI_DB = {str(key).upper(): str(value) for key, value in data.items()}
+                _OUI_DB = {}
+                for key, value in data.items():
+                    normalized_key = _normalize_oui(str(key))
+                    if normalized_key:
+                        _OUI_DB[normalized_key] = str(value).strip()
     except Exception:
         _OUI_DB = {}
     return _OUI_DB
@@ -40,11 +45,10 @@ def _load_oui_db() -> dict[str, str]:
 def _normalize_oui(mac: str | None) -> str:
     if not mac:
         return ""
-    sanitized = str(mac).strip().upper().replace("-", ":")
-    parts = sanitized.split(":")
-    if len(parts) < 3:
+    hex_value = re.sub(r"[^0-9A-Fa-f]", "", str(mac)).upper()
+    if len(hex_value) < 6:
         return ""
-    return ":".join(parts[:3])
+    return ":".join(hex_value[index:index + 2] for index in range(0, 6, 2))
 
 
 def get_ssid(packet):

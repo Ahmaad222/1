@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 from datetime import datetime
@@ -49,6 +50,9 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 def _normalize_bssid(value: Any) -> str:
     if value is None:
         return ""
+    hex_value = re.sub(r"[^0-9A-Fa-f]", "", str(value)).upper()
+    if len(hex_value) == 12:
+        return ":".join(hex_value[index:index + 2] for index in range(0, 12, 2))
     return str(value).strip().upper().replace("-", ":")
 
 def _normalize_ssid(value: Any) -> str:
@@ -126,14 +130,13 @@ def upsert_network(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         clients_count = existing.get("clients_count", 0)
         
         if isinstance(raw_clients, list):
-            new_list = _normalize_clients(raw_clients)
-            if new_list:
-                clients_list = new_list
-                clients_count = len(clients_list)
+            clients_list = _normalize_clients(raw_clients)
+            clients_count = len(clients_list)
         elif isinstance(raw_clients, (int, float, str)):
             new_c = _safe_int(raw_clients, default=0)
-            if new_c > clients_count:
-                clients_count = new_c
+            clients_count = max(new_c or 0, 0)
+            if clients_count == 0:
+                clients_list = []
 
         # --- RE-EVALUATION LOGIC START ---
         # 1. First, check the live status from the physical file

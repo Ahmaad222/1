@@ -562,9 +562,13 @@ class WSClient:
                 clients_map.get(bssid)
                 or clients_map.get(str(bssid).upper())
                 or clients_map.get(str(bssid).lower())
-                or set()
+                or {}
             )
-            client_macs = sorted(str(mac).strip().upper() for mac in client_set if mac)
+            if isinstance(client_set, dict):
+                client_iterable = client_set.keys()
+            else:
+                client_iterable = client_set
+            client_macs = sorted(str(mac).strip().upper() for mac in client_iterable if mac)
             return [{"mac": mac, "type": "device"} for mac in client_macs]
         except Exception as exc:
             LOGGER.debug("[SCAN PAYLOAD] failed to build clients for %s: %s", bssid, exc)

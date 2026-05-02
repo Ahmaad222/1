@@ -29,6 +29,7 @@ export interface LiveNetworkEvent {
   wps?: string | null;
   encryption?: string | null;
   uptime?: string | null;
+  clients?: any[];
   clients_count?: number | null;
   manufacturer?: string | null;
 }
@@ -48,10 +49,45 @@ function estimateDistance(signal: number | null | undefined): string {
   return '30m+';
 }
 
-function RouterUptimeValue({ totalSeconds }: { totalSeconds: number }) {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return <span>--</span>;
+function parseUptimeSeconds(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
 
-  const normalized = Math.max(0, Math.floor(totalSeconds));
+function elapsedSecondsSince(value?: string | null): number {
+  if (!value) return 0;
+  const lastSeenMs = new Date(value).getTime();
+  if (Number.isNaN(lastSeenMs)) return 0;
+  return Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000));
+}
+
+function RouterUptimeValue({ baseSeconds, lastSeen }: { baseSeconds: number; lastSeen?: string | null }) {
+  const resolveSeconds = useCallback(
+    () => baseSeconds + elapsedSecondsSince(lastSeen),
+    [baseSeconds, lastSeen],
+  );
+  const [displaySeconds, setDisplaySeconds] = useState(resolveSeconds);
+
+  useEffect(() => {
+    setDisplaySeconds((current) => {
+      const next = resolveSeconds();
+      if (next < current - 5) return next;
+      return Math.max(current, next);
+    });
+  }, [resolveSeconds]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDisplaySeconds((current) => current + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!Number.isFinite(displaySeconds) || displaySeconds <= 0) {
+    return <span className="inline-block min-w-[112px] font-mono tabular-nums whitespace-nowrap">--</span>;
+  }
+
+  const normalized = Math.max(0, Math.floor(displaySeconds));
   const d = Math.floor(normalized / 86400);
   const h = Math.floor((normalized % 86400) / 3600);
   const m = Math.floor((normalized % 3600) / 60);
@@ -98,21 +134,28 @@ function TelemetryStatusBadge({ status, icon, label }: { status: string; icon: R
 }
 
 function normalizeNetwork(network: any): LiveNetworkEvent {
+  const clients = Array.isArray(network.clients) ? network.clients : [];
+  const rawClientsCount = network.clients_count ?? network.clients;
+  const parsedClientsCount = Array.isArray(rawClientsCount)
+    ? rawClientsCount.length
+    : Number(rawClientsCount);
+
   return {
     ...network,
-    bssid: String(network.bssid || '').toUpperCase(),
+    bssid: String(network.bssid || '').trim().toUpperCase().replace(/-/g, ':'),
     classification: network.classification || 'LEGIT',
     sensor_id: network.sensor_id || 0,
     channel: network.channel || 0,
     signal: network.signal || 0,
     last_seen: network.last_seen || network.timestamp || new Date().toISOString(),
     distance: network.distance && network.distance !== 'Unknown' ? String(network.distance) : null,
-    auth: network.auth && network.auth !== 'Unknown' && network.auth !== 'None' ? String(network.auth) : null,
-    wps: network.wps && network.wps !== 'Unknown' && network.wps !== 'None' ? String(network.wps) : null,
-    encryption: network.encryption && network.encryption !== 'Unknown' ? String(network.encryption) : null,
-    uptime: network.uptime && network.uptime !== 'Unknown' ? String(network.uptime) : null,
-    clients_count: Number(network.clients_count || network.clients || 0),
-    manufacturer: network.manufacturer && network.manufacturer !== 'Unknown Mfr' && network.manufacturer !== 'Unknown' ? String(network.manufacturer) : null,
+    auth: (network.auth || network.auth_type) && !['unknown', 'none', 'n/a'].includes(String(network.auth || network.auth_type).toLowerCase()) ? String(network.auth || network.auth_type) : null,
+    wps: (network.wps || network.wps_info) && !['unknown', 'none', 'n/a'].includes(String(network.wps || network.wps_info).toLowerCase()) ? String(network.wps || network.wps_info) : null,
+    encryption: network.encryption && !['unknown', 'none', 'n/a'].includes(String(network.encryption).toLowerCase()) ? String(network.encryption) : null,
+    uptime: (network.uptime || network.uptime_seconds) && String(network.uptime || network.uptime_seconds).toLowerCase() !== 'unknown' ? String(network.uptime || network.uptime_seconds) : null,
+    clients,
+    clients_count: Number.isFinite(parsedClientsCount) ? Math.max(0, parsedClientsCount) : clients.length,
+    manufacturer: network.manufacturer && !['unknown mfr', 'unknown', 'none', 'n/a'].includes(String(network.manufacturer).toLowerCase()) ? String(network.manufacturer) : null,
   };
 }
 
@@ -126,7 +169,6 @@ export function LiveNetworkConsole() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [attackState, setAttackState] = useState<string | null>(null);
   const [trustingBssids, setTrustingBssids] = useState<Set<string>>(new Set());
 
@@ -136,11 +178,6 @@ export function LiveNetworkConsole() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  useEffect(() => {
-    const interval = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
-  
   const [sortField, setSortField] = useState<SortField>('ssid');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   
@@ -164,7 +201,18 @@ export function LiveNetworkConsole() {
     else if (onlineSensors > 0) sensorStatus = 'warning';
 
     const activeAttacks = Array.from(currentMap.values()).filter(n => n.classification === 'ROGUE').length;
-    setTelemetry({ sensorStatus, backendStatus: 'connected', discoveredNetworks: currentMap.size, activeAttacks, lastUpdate: new Date().toISOString() });
+    setTelemetry((previous) => {
+      if (
+        previous.sensorStatus === sensorStatus &&
+        previous.backendStatus === 'connected' &&
+        previous.discoveredNetworks === currentMap.size &&
+        previous.activeAttacks === activeAttacks
+      ) {
+        return previous;
+      }
+
+      return { sensorStatus, backendStatus: 'connected', discoveredNetworks: currentMap.size, activeAttacks, lastUpdate: new Date().toISOString() };
+    });
   }, [sensorStatuses]);
 
   const mergeIncomingNetworks = useCallback((incoming: any[]) => {
@@ -173,12 +221,19 @@ export function LiveNetworkConsole() {
 
     setNetworksMap(prevMap => {
       const newMap = new Map(prevMap);
+      let changed = false;
+
       incoming.forEach(rawNet => {
         const norm = normalizeNetwork(rawNet);
         const existing = newMap.get(norm.bssid);
         
         if (existing) {
-          newMap.set(norm.bssid, {
+          const existingUptime = parseUptimeSeconds(existing.uptime);
+          const incomingUptime = parseUptimeSeconds(norm.uptime);
+          const shouldRefreshUptime =
+            incomingUptime > 0 &&
+            (!existingUptime || incomingUptime < existingUptime - 5);
+          const nextNetwork: LiveNetworkEvent = {
             ...existing,
             ...norm,
             classification: norm.classification, 
@@ -187,19 +242,39 @@ export function LiveNetworkConsole() {
             wps: norm.wps || existing.wps,
             auth: norm.auth || existing.auth,
             encryption: norm.encryption || existing.encryption,
-            uptime: norm.uptime || existing.uptime,
-            clients_count: Math.max(norm.clients_count || 0, existing.clients_count || 0),
+            uptime: shouldRefreshUptime ? norm.uptime : existing.uptime,
+            last_seen: shouldRefreshUptime ? norm.last_seen : existing.last_seen,
+            clients: Array.isArray(norm.clients) ? norm.clients : existing.clients,
+            clients_count: norm.clients_count ?? existing.clients_count ?? 0,
             signal: (norm.signal && norm.signal !== 0) ? norm.signal : existing.signal,
-          });
+          };
+          const isSame =
+            existing.ssid === nextNetwork.ssid &&
+            existing.classification === nextNetwork.classification &&
+            existing.channel === nextNetwork.channel &&
+            existing.wps === nextNetwork.wps &&
+            existing.auth === nextNetwork.auth &&
+            existing.encryption === nextNetwork.encryption &&
+            existing.uptime === nextNetwork.uptime &&
+            existing.last_seen === nextNetwork.last_seen &&
+            existing.clients_count === nextNetwork.clients_count &&
+            existing.signal === nextNetwork.signal &&
+            existing.manufacturer === nextNetwork.manufacturer;
+
+          if (!isSame) {
+            newMap.set(norm.bssid, nextNetwork);
+            changed = true;
+          }
         } else {
           newMap.set(norm.bssid, norm);
+          changed = true;
         }
       });
-      updateTelemetry(newMap);
-      return newMap;
+
+      return changed ? newMap : prevMap;
     });
     setHasNetworkSnapshot(true);
-  }, [updateTelemetry]);
+  }, []);
 
   const upsertSensorStatus = useCallback((incoming: any) => {
     // الكشف الذكي عن الأعطال للداشبورد
@@ -321,24 +396,8 @@ export function LiveNetworkConsole() {
     else { setSortField(field); setSortDirection('asc'); }
   };
 
-  const parseLastSeenMs = useCallback((rawValue?: string) => {
-    if (!rawValue) return NaN;
-    const ms = new Date(rawValue).getTime();
-    return Number.isNaN(ms) ? NaN : ms;
-  }, []);
-
-  const computeRollingUptimeSeconds = useCallback((network: LiveNetworkEvent) => {
-    const baseUptimeSeconds = Number(network.uptime);
-    if (!Number.isFinite(baseUptimeSeconds) || baseUptimeSeconds <= 0) return 0;
-    const lastSeenMs = parseLastSeenMs(network.last_seen);
-    const elapsedSeconds = Number.isNaN(lastSeenMs) ? 0 : Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
-    return Math.max(0, Math.floor(baseUptimeSeconds) + elapsedSeconds);
-  }, [nowMs, parseLastSeenMs]);
-
   const networkList = useMemo(() => {
-    let list = Array.from(networksMap.values()).map(n => {
-      return { ...n, distance: estimateDistance(n.signal) };
-    });
+    let list = Array.from(networksMap.values());
 
     if (debouncedSearchQuery) {
       const query = debouncedSearchQuery.toLowerCase().trim();
@@ -352,14 +411,14 @@ export function LiveNetworkConsole() {
         case 'bssid': comparison = left.bssid.localeCompare(right.bssid); break;
         case 'signal': comparison = (right.signal ?? -999) - (left.signal ?? -999); break;
         case 'classification': comparison = (left.classification || '').localeCompare(right.classification || ''); break;
-        case 'uptime': comparison = computeRollingUptimeSeconds(left) - computeRollingUptimeSeconds(right); break;
+        case 'uptime': comparison = parseUptimeSeconds(left.uptime) - parseUptimeSeconds(right.uptime); break;
         case 'channel': comparison = (left.channel ?? 0) - (right.channel ?? 0); break;
         case 'clients': comparison = (left.clients_count ?? 0) - (right.clients_count ?? 0); break;
       }
       if (comparison === 0) return left.bssid.localeCompare(right.bssid);
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [networksMap, sortField, sortDirection, debouncedSearchQuery, computeRollingUptimeSeconds]);
+  }, [networksMap, sortField, sortDirection, debouncedSearchQuery]);
 
   const handleAttack = (network: LiveNetworkEvent) => {
     try { sendAttackCommand({ sensor_id: network.sensor_id || 0, bssid: network.bssid }); setAttackState(`Dispatching deauth for ${network.bssid}`); } 
@@ -445,6 +504,7 @@ export function LiveNetworkConsole() {
                         const authValue = network.auth || network.encryption || 'Unknown';
                         const isTrusted = (network.classification || '').toUpperCase() === 'LEGIT';
                         const isTrusting = trustingBssids.has(network.bssid);
+                        const distanceValue = network.distance || estimateDistance(network.signal);
 
                         return (
                         <tr key={network.bssid} className={`border-b border-emerald-500/5 hover:bg-emerald-500/5 transition-all duration-200 ${index % 2 === 0 ? 'bg-slate-900/40' : 'bg-slate-800/20'}`}>
@@ -467,7 +527,7 @@ export function LiveNetworkConsole() {
                               <div className={`text-base font-medium ${(network.signal || -999) > -60 ? 'text-emerald-400' : (network.signal || -999) > -75 ? 'text-amber-400' : network.signal && network.signal !== 0 ? 'text-red-400' : 'text-emerald-500/50'}`}>
                                 {network.signal && network.signal !== 0 ? `${network.signal} dBm` : '--'}
                               </div>
-                              <div className="text-xs text-slate-400 font-mono">{network.distance || '--'}</div>
+                              <div className="text-xs text-slate-400 font-mono">{distanceValue || '--'}</div>
                             </div>
                           </td>
                           <td className="px-3 py-4">
@@ -491,7 +551,7 @@ export function LiveNetworkConsole() {
                           </td>
                           <td className="px-3 py-4 w-[120px]">
                             <div className="text-sm text-emerald-100/70">
-                              <RouterUptimeValue totalSeconds={computeRollingUptimeSeconds(network)} />
+                              <RouterUptimeValue baseSeconds={parseUptimeSeconds(network.uptime)} lastSeen={network.last_seen} />
                             </div>
                           </td>
                           <td className="px-3 py-4">

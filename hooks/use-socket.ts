@@ -19,6 +19,10 @@ export interface LiveNetworkEvent {
   timestamp?: string;
   last_seen: string;
   distance?: number | string;
+  auth?: string | null;
+  wps?: string | null;
+  encryption?: string | null;
+  uptime?: number | string | null;
   clients?: any[];
   clients_count?: number;
 }
@@ -189,11 +193,20 @@ function normalizeClients(value: unknown): LiveNetworkEvent['clients'] {
 function normalizeNetworkItem(item: unknown): LiveNetworkEvent {
   const network = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
   const lastSeen = normalizeLastSeen(network.last_seen ?? network.timestamp);
+  const clients = normalizeClients(network.clients);
+  const rawClientsCount = network.clients_count ?? network.clients;
+  const parsedClientsCount = Array.isArray(rawClientsCount) ? rawClientsCount.length : Number(rawClientsCount);
+  const clientsCount = Number.isFinite(parsedClientsCount) ? Math.max(0, parsedClientsCount) : clients.length;
+  const manufacturer = network.manufacturer == null ? null : String(network.manufacturer).trim();
+  const normalizedManufacturer =
+    manufacturer && !['unknown', 'unknown mfr', 'none', 'n/a'].includes(manufacturer.toLowerCase())
+      ? manufacturer
+      : null;
 
   return {
     sensor_id: Number(network.sensor_id || 0),
     ssid: String(network.ssid || 'Hidden').trim() || 'Hidden',
-    bssid: String(network.bssid || '').trim().toUpperCase(),
+    bssid: String(network.bssid || '').trim().toUpperCase().replace(/-/g, ':'),
     signal: typeof network.signal === 'number' ? network.signal : network.signal == null ? null : Number(network.signal),
     channel: typeof network.channel === 'number' ? network.channel : network.channel == null ? null : Number(network.channel),
     frequency: typeof network.frequency === 'number' ? network.frequency : network.frequency == null ? null : Number(network.frequency),
@@ -206,8 +219,13 @@ function normalizeNetworkItem(item: unknown): LiveNetworkEvent {
     
     last_seen: lastSeen,
     timestamp: typeof network.timestamp === 'string' ? network.timestamp : lastSeen,
-    manufacturer: network.manufacturer == null ? null : String(network.manufacturer),
-    clients: normalizeClients(network.clients),
+    manufacturer: normalizedManufacturer,
+    auth: (network.auth ?? network.auth_type) == null ? null : String(network.auth ?? network.auth_type),
+    wps: (network.wps ?? network.wps_info) == null ? null : String(network.wps ?? network.wps_info),
+    encryption: network.encryption == null ? null : String(network.encryption),
+    uptime: network.uptime ?? network.uptime_seconds ?? null,
+    clients,
+    clients_count: clientsCount,
     distance: network.distance ? (typeof network.distance === 'number' ? network.distance : String(network.distance)) : undefined,
   };
 }
